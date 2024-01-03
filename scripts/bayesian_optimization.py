@@ -252,7 +252,7 @@ class BayesOptCLI:
                 wiggle = np.random.normal(0, (max_gamma - 1) / self.args.hyperopt.steps)
                 grid_search_gamma(
                     self.model,
-                    min_gamma=1.0,
+                    min_gamma=2.0,
                     max_gamma=max_gamma + wiggle,
                     num=self.args.hyperopt.steps,
                     loss=self.args.hyperopt.loss

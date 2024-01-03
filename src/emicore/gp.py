@@ -233,7 +233,7 @@ class Kernel:
 class VQEKernel(Kernel):
     __kernel_params__ = ('gamma',)
 
-    def __init__(self, sigma_0=1.0, gamma=1.0, n_feature_dim=2):
+    def __init__(self, sigma_0=1.0, gamma=2.0, n_feature_dim=2):
         super().__init__(n_feature_dim=n_feature_dim)
         self.sigma_0 = sigma_0
         self.gamma = torch.tensor(gamma)
@@ -241,7 +241,7 @@ class VQEKernel(Kernel):
 
     @flatargs
     def __call__(self, x1, x2):
-        gram_matrix = (self.gamma ** 2 + torch.cos(cdiff(x1, x2))).log() - (1 + self.gamma ** 2).log()
+        gram_matrix = (self.gamma ** 2 + 2 * torch.cos(cdiff(x1, x2))).log() - (2 + self.gamma ** 2).log()
         kern = self.sigma_0_sq * gram_matrix.sum(axis=-1).exp()
         return kern
 

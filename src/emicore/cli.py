@@ -308,6 +308,8 @@ OPTIMIZER_SETUPS = {
         'core_trials',
         'corethresh',
         'corethresh_width',
+        'corethresh_scale',
+        'coremin_scale',
         'smo_steps',
         'smo_axis',
     )),
@@ -336,7 +338,7 @@ class QCParams(OptionParams):
 
 class KernelParams(OptionParams):
     sigma_0: PositiveFloat = None, 'Prior variance'
-    gamma: PositiveFloat = 1.0, 'Kernel width parameter'
+    gamma: PositiveFloat = 2.0, 'Kernel width parameter'
 
 
 class GPParams(OptionParams):
@@ -363,6 +365,8 @@ class AcqParams(OptionParams):
     samplesize: int = 100, ''
     corethresh: PositiveFloat = 1.0, ''
     corethresh_width: int = 10, ''
+    corethresh_scale: float = 1.0, ''
+    coremin_scale: float = 0.0, ''
     core_trials: int = 0, ''
     smo_steps: int = 100, ''
     smo_axis: click.BOOL = False, ''
@@ -375,7 +379,7 @@ class HyperParams(OptionParams):
     threshold: PositiveFloat = 0.0, ''
     steps: int = 200, ''
     interval: str = '', ''
-    max_gamma: PositiveFloat = 10.0, ''
+    max_gamma: PositiveFloat = 20.0, ''
 
 
 class BOParams(OptionParams):

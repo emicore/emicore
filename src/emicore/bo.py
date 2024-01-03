@@ -269,8 +269,10 @@ class EMICOREOptimizer(SMOOptimizer):
         pairsize=20,
         gridsize=100,
         samplesize=100,
-        corethresh=1.0,
+        corethresh=1.,
         corethresh_width=10,
+        corethresh_scale=1.,
+        coremin_scale=0.,
         core_trials=10,
         smo_steps=100,
         smo_axis=False,
@@ -282,6 +284,8 @@ class EMICOREOptimizer(SMOOptimizer):
         self.samplesize = samplesize
         self.corethresh = corethresh
         self.corethresh_width = corethresh_width
+        self.corethresh_scale = corethresh_scale
+        self.coremin_scale = coremin_scale
         self.core_trials = core_trials
         self.smo_steps = smo_steps
         self.smo_axis = smo_axis
@@ -323,15 +327,16 @@ class EMICOREOptimizer(SMOOptimizer):
         if self.corethresh_width > 0:
             state.setdefault('energy_log', []).append(state['y_start'].item())
             if len(state['energy_log']) > self.corethresh_width:
-                state['corethresh'] = max(0., (
+                state['corethresh'] = max(self.coremin_scale * model.reg ** 0.5, (
                         state['energy_log'][-self.corethresh_width - 1] - state['energy_log'][-1]
-                    ) / self.corethresh_width
+                    ) / self.corethresh_width * self.corethresh_scale
                 )
 
         x_pairs, maximp = self._emicore(model, state, state['k_best'])
         bestind = maximp.argmax()
 
         return x_pairs[bestind]
+
 
     def require_stabilize(self, model, state):
         stabilize = (
