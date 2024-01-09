@@ -1,5 +1,6 @@
 import logging
 import math
+from itertools import product
 
 import numpy as np
 import torch
@@ -15,12 +16,15 @@ class BayesianOptimization:
         self.optimizer = optimizer
         self.true_fn = true_fn
         self.error_fn = error_fn
-        self.optim_state = self.optimizer.init_state(self.model, self.true_fn)
+        self.optim_state = self.optimizer.init_state(self.model)
 
     def step(self, step):
         self.optim_state['step'] = step
         x_best = self.optimizer(self.model, self.optim_state)
         y_best = self.true_fn(x_best)
+        self.optim_state['n_qc_eval'] += len(y_best)
+        self.optim_state['n_qc_readout'] += len(y_best) * self.optim_state['n_readout']
+
 
         try:
             self.optimizer.update(self.model, self.optim_state, x_best, y_best)
@@ -32,14 +36,18 @@ class BayesianOptimization:
 
 
 class Optimizer:
-    def __init__(self, acquisition_fn, sampler=None):
+    def __init__(self, acquisition_fn, sampler=None, n_readout=None):
         self.acquisition_fn = acquisition_fn
         self.sampler = sampler
+        self._n_readout = n_readout
 
-    def init_state(self, model, true_fn):
+    def init_state(self, model):
         min_energy_ind = model.y_train.argmin()
         return {
             'step': 0,
+            'n_qc_eval': len(model),
+            'n_qc_readout': 0,
+            'n_readout': self._n_readout,
             'x_start': model.x_train[min_energy_ind],
             'x_best': model.x_train[min_energy_ind],
             'y_start': model.y_train[min_energy_ind],
@@ -271,9 +279,14 @@ class EMICOREOptimizer(SMOOptimizer):
         samplesize=100,
         corethresh=1.0,
         corethresh_width=10,
+        corethresh_scale=1.,
+        coremin_scale=0.,
         core_trials=10,
         smo_steps=100,
         smo_axis=False,
+        pivot_steps=0,
+        pivot_scale=1.0,
+        pivot_mode='smo',
         **kwargs
     ):
         super().__init__(*args, **kwargs)
@@ -282,9 +295,14 @@ class EMICOREOptimizer(SMOOptimizer):
         self.samplesize = samplesize
         self.corethresh = corethresh
         self.corethresh_width = corethresh_width
+        self.corethresh_scale = corethresh_scale
+        self.coremin_scale = coremin_scale
         self.core_trials = core_trials
         self.smo_steps = smo_steps
         self.smo_axis = smo_axis
+        self.pivot_steps = pivot_steps
+        self.pivot_scale = pivot_scale
+        self.pivot_mode = pivot_mode
 
     def _emicore(self, model, state, axis):
         single_candidates = torch.linspace(0, math.tau, self.pairsize + 1)[:-1]
@@ -323,9 +341,9 @@ class EMICOREOptimizer(SMOOptimizer):
         if self.corethresh_width > 0:
             state.setdefault('energy_log', []).append(state['y_start'].item())
             if len(state['energy_log']) > self.corethresh_width:
-                state['corethresh'] = max(0., (
+                state['corethresh'] = max(self.coremin_scale * model.reg ** 0.5, (
                         state['energy_log'][-self.corethresh_width - 1] - state['energy_log'][-1]
-                    ) / self.corethresh_width
+                    ) / self.corethresh_width * self.corethresh_scale
                 )
 
         x_pairs, maximp = self._emicore(model, state, state['k_best'])
@@ -358,6 +376,37 @@ class EMICOREOptimizer(SMOOptimizer):
         axes, maximps = zip(*((axis, self._emicore(model, state, axis)[1].amax(0)) for axis in axes))
         return axes[torch.stack(maximps).argmax()]
 
+    def choose_pivot(self, model, state):
+        '''Given the shift candidates, find the best point on the line.'''
+        k_best = state['k_best']
+        x_start, y_start = super().choose_pivot(model, state)
+        try:
+            if state.get('corethresh', self.corethresh) <= model.reg * self.pivot_scale:
+                for n in range(self.pivot_steps):
+                    last = (x_start, y_start)
+                    if self.pivot_mode == 'smo':
+                        state['k_best'] = self.choose_axis(model, state)
+                        x_start, y_start = super().choose_pivot(model, state)
+                        if (model.posterior(x_start[None]).std > state.get('corethresh', self.corethresh)).all():
+                            return last
+                    elif self.pivot_mode == 'loop':
+                        k_next = state['k_best']
+                        for k_dir in set(product(*(range(dim) for dim in x_start.shape))) - {k_next}:
+                            state['k_best'] = k_dir
+                            x_next, y_next = super().choose_pivot(model, state)
+                            if (
+                                (model.posterior(x_next[None]).std <= state.get('corethresh', self.corethresh)).all()
+                                # and y_next < y_start
+                            ):
+                                x_start, y_start, k_next = x_next, y_next, k_dir
+                        state['k_best'] = k_next
+                        if (last[0] == x_start).all():
+                            return last
+                    else:
+                        raise RuntimeError('No such pivot-mode!')
+            return x_start, y_start
+        finally:
+            state['k_best'] = k_best
 
 class AcquisitionFunction:
     def __call__(self, model, x_cand, step):

@@ -4,7 +4,7 @@ import time
 import signal
 from argparse import Namespace
 from functools import wraps
-
+from itertools import count
 
 import click
 import torch
@@ -34,6 +34,8 @@ def main(ctx, seed, json_log):
 
     ctx.ensure_object(Namespace)
     ctx.obj.rng = np.random.default_rng(seed)
+
+    ctx.obj.run = None
 
     if json_log is not None:
         ctx.obj.json_log = json_log
@@ -84,7 +86,8 @@ class BayesOptCLI:
         params = self.args.acq_params
 
         acq_func_name = click.Choice(list(ACQUISITION_FNS))(getattr(params, 'func', 'lcb'))
-        acq_func, acq_kwargs = ACQUISITION_FNS[acq_func_name]
+        acq_func, acq_params = ACQUISITION_FNS[acq_func_name]
+        acq_kwargs = {key: getattr(params, key) for key in acq_params}
 
         acquisition_optimizer_name = click.Choice(list(OPTIMIZER_SETUPS))(getattr(params, 'optim', 'oneshot'))
         optimizer_fn, optimizer_params = OPTIMIZER_SETUPS[acquisition_optimizer_name]
@@ -101,7 +104,8 @@ class BayesOptCLI:
 
         optimizer_kwargs.update({
             'acquisition_fn': acq_func(**acq_kwargs),
-            'sampler': candidate_sampler
+            'sampler': candidate_sampler,
+            'n_readout': self.args.n_readout
         })
         return optimizer_fn(**optimizer_kwargs)
 
@@ -158,7 +162,7 @@ class BayesOptCLI:
 
     @final_property
     def log(self):
-        log_keys = ('true_energy', 'pred_energy', 'best_params', 'gamma_history', 'n_qc_eval', 'k_last')
+        log_keys = ('true_energy', 'pred_energy', 'best_params', 'gamma_history', 'n_qc_eval', 'n_qc_readout', 'k_last')
         return {key: [] for key in log_keys}
 
     @final_property
@@ -171,7 +175,8 @@ class BayesOptCLI:
             else:
                 y_true = self.sampler.exact_energy(state['x_start'][None].numpy()).item()
             observables = {
-                'n_qc_eval': len(model.x_train),
+                'n_qc_eval': state.get('n_qc_eval', 0),
+                'n_qc_readout': state.get('n_qc_readout', 0),
                 'y_best': state.get('y_best', 0.).item(),
                 'y_start': state.get('y_start', 0.).item(),
                 'y_true': y_true,
@@ -201,6 +206,8 @@ class BayesOptCLI:
 
             logging.warning(
                 f'Step {state["step"]:04d}, '
+                f'eval {state["n_qc_eval"]:04d}, '
+                f'readout {state["n_qc_readout"]:09d}, '
                 f'last energy: {observables["y_start"]:.3e}, '
                 f'true energy: {y_true:.3e}, '
                 f'best energy: {observables["y_best"]:.3e}, '
@@ -212,7 +219,8 @@ class BayesOptCLI:
                 ('pred_energy', observables['y_start']),
                 ('best_params', state['x_start']),
                 ('gamma_history', observables.get('kernel.gamma')),
-                ('n_qc_eval', len(model.x_train)),
+                ('n_qc_eval', observables['n_qc_eval']),
+                ('n_qc_readout', observables['n_qc_readout']),
                 ('k_last', observables.get('k_last')),
             )
             for key, value in storables:
@@ -245,6 +253,29 @@ class BayesOptCLI:
             'mll': self.model.log_likelihood,
         }[self.args.hyperopt.loss]
 
+    @final_property
+    def n_iter(self):
+        '''An estimate for the number of iterations (only exact for iter-mode 'step').'''
+        if self.args.iter_mode == 'qc':
+            return (self.args.n_iter - self.args.train_samples) // 2
+        elif self.args.iter_mode == 'readout':
+            return ((self.args.n_iter - self.args.train_samples * self.args.n_readout) // (self.args.n_readout // 2))
+
+        return self.args.n_iter
+
+    def __len__(self):
+        return self.n_iter
+
+    def __iter__(self):
+        for i in count():
+            if (
+                (self.args.iter_mode == 'qc' and self.bayes_opt.optim_state['n_qc_eval'] >= self.args.n_iter)
+                or (self.args.iter_mode == 'readout' and self.bayes_opt.optim_state['n_qc_readout'] >= self.args.n_iter)
+                or (self.args.iter_mode != 'qc' and i > self.args.n_iter)
+            ):
+                return
+            yield i
+
     def hyperopt(self, step):
         if self.args.hyperopt.optim == 'grid':
             if self.interval(step):
@@ -252,7 +283,7 @@ class BayesOptCLI:
                 wiggle = np.random.normal(0, (max_gamma - 1) / self.args.hyperopt.steps)
                 grid_search_gamma(
                     self.model,
-                    min_gamma=1.0,
+                    min_gamma=2.0,
                     max_gamma=max_gamma + wiggle,
                     num=self.args.hyperopt.steps,
                     loss=self.args.hyperopt.loss
@@ -271,6 +302,13 @@ def train(ctx, **kwargs):
     ns = BayesOptCLI(args, ctx)
     start_time = time.time()
 
+    if ctx.obj.run is not None:
+        ctx.obj.run['params'] = ctx.params
+        ctx.obj.run['true_energy'] = {
+            'e0': ns.true_solution.e0.item(),
+            'e1': ns.true_solution.e1.item(),
+        }
+
     ns.log['gamma_history'].append(ns.model.kernel.gamma.detach().item())
 
     try:
@@ -278,6 +316,7 @@ def train(ctx, **kwargs):
             ns.hyperopt(bayes_step)
             ns.bayes_opt.step(bayes_step)
     finally:
+
         best_params = torch.stack(ns.log['best_params'], dim=0)
         overlap = ns.sampler.exact_overlap(best_params.numpy())
 
@@ -297,6 +336,7 @@ def train(ctx, **kwargs):
             'runtime': runtime,
             'gamma': ns.log['gamma_history'][1:],
             'n_qc_eval': ns.log['n_qc_eval'],
+            'n_qc_readout': ns.log['n_qc_readout'],
         }
 
         if args.reg_term_estimates is not None and args.reg_term_estimates > 0:

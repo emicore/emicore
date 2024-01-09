@@ -188,14 +188,13 @@ class DataSampler:
     def true_energy(self, angles):
         if isinstance(angles, np.ndarray):
             angles = torch.from_numpy(angles)
-        return torch.tensor(
-            self.energy_fn(angles.numpy())
-        ).to(angles)
+        return torch.tensor(self.energy_fn(angles.numpy())).to(angles)
 
     def true_energy_variance(self, angles):
         if isinstance(angles, np.ndarray):
             angles = torch.from_numpy(angles)
-        return self.energy_var_fn(angles)
+        kwargs = {}
+        return self.energy_var_fn(angles, **kwargs)
 
     def sample(self, n_samples=1000, known=True):
         # expand and fill in template
@@ -244,16 +243,8 @@ class DataSampler:
         )
 
     def exact_energy(self, angles):
-        return measure_energy(
-            self.kwargs['n_qbits'],
-            self.kwargs['n_layers'],
-            self.kwargs['j'],
-            self.kwargs['h'],
-            angles=np.array(angles),
-            pbc=self.kwargs['pbc'],
-            mom_sector=self.kwargs['mom_sector'],
-            circuit=self.kwargs['circuit'],
-        )
+        return self.true_energy(angles)
+
 
     @property
     def _cache_identifiers(self):

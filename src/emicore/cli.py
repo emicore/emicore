@@ -308,8 +308,13 @@ OPTIMIZER_SETUPS = {
         'core_trials',
         'corethresh',
         'corethresh_width',
+        'corethresh_scale',
+        'coremin_scale',
         'smo_steps',
         'smo_axis',
+        'pivot_steps',
+        'pivot_scale',
+        'pivot_mode',
     )),
 }
 
@@ -336,7 +341,7 @@ class QCParams(OptionParams):
 
 class KernelParams(OptionParams):
     sigma_0: PositiveFloat = None, 'Prior variance'
-    gamma: PositiveFloat = 1.0, 'Kernel width parameter'
+    gamma: PositiveFloat = 2.0, 'Kernel width parameter'
 
 
 class GPParams(OptionParams):
@@ -363,9 +368,14 @@ class AcqParams(OptionParams):
     samplesize: int = 100, ''
     corethresh: PositiveFloat = 1.0, ''
     corethresh_width: int = 10, ''
+    corethresh_scale: float = 1.0, ''
+    coremin_scale: float = 0.0, ''
     core_trials: int = 0, ''
     smo_steps: int = 100, ''
     smo_axis: click.BOOL = False, ''
+    pivot_steps: int = 0, ''
+    pivot_scale: float = 1.0, ''
+    pivot_mode: click.Choice(['smo', 'loop']) = 'smo', ''  # noqa: F821
 
 
 class HyperParams(OptionParams):
@@ -375,13 +385,14 @@ class HyperParams(OptionParams):
     threshold: PositiveFloat = 0.0, ''
     steps: int = 200, ''
     interval: str = '', ''
-    max_gamma: PositiveFloat = 10.0, ''
+    max_gamma: PositiveFloat = 20.0, ''
 
 
 class BOParams(OptionParams):
     train_samples: int = 1, ''
     candidate_samples: int = 500, ''
     candidate_shots: int = 10, ''
-    n_iter: int = 50, 'Iteration for Bayesian Optimization'
+    n_iter: int = 50, 'Iterations for Bayesian Optimization'
     acq_params: AcqParams() = '', ''
     hyperopt: HyperParams() = '', ''
+    iter_mode: click.Choice(['step', 'qc', 'readout']) = 'step', ''  # noqa: F821
